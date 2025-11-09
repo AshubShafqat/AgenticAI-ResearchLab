@@ -229,6 +229,55 @@ Please provide:
 Include references to specific papers where mentioned. Format your response clearly."""
         
         return self.generate_response(prompt)
+    
+# ---------------- Multi-Agent System ---------------- #
+class Agent:
+    def __init__(self, name: str, client, role_description: str):
+        self.name = name
+        self.client = client
+        self.role_description = role_description
+        self.memory = []
+
+    def act(self, context: str) -> str:
+        """Agent produces an output based on context and its role."""
+        prompt = f"""
+        You are {self.name}, {self.role_description}.
+        Based on the following context from research papers, provide your insights or analysis.
+
+        Context:
+        {context[:8000]}
+        """
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.0-flash-exp",
+                contents=prompt
+            )
+            self.memory.append(response.text)
+            return response.text
+        except Exception as e:
+            return f"Error: {e}"
+
+
+class MultiAgentSystem:
+    def __init__(self, client):
+        self.agents = []
+        self.client = client
+
+    def add_agent(self, agent: Agent):
+        self.agents.append(agent)
+
+    def run_cycle(self, context: str) -> dict:
+        """
+        Each agent processes the context sequentially and passes results to next agent.
+        """
+        conversation_log = {}
+        shared_context = context
+        for agent in self.agents:
+            output = agent.act(shared_context)
+            conversation_log[agent.name] = output
+            shared_context += "\n\n" + output  # Pass output to next agent
+        return conversation_log
+
 
 # Streamlit UI
 def main():
@@ -341,8 +390,13 @@ def main():
     
     # Display tabs for different functionalities
     if st.session_state.vector_store is not None:
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "💬 Q&A", "📊 Summary Report", "🏗️ Architecture Report", "🔍 Research Gaps", "📈 Statistics"
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+            "💬 Q&A",
+            "📊 Summary Report",
+            "🏗️ Architecture Report",
+            "🔍 Research Gaps",
+            "📈 Statistics",
+            "🤖 Multi-Agent Insights"  # New tab added here
         ])
         
         with tab1:
@@ -453,7 +507,51 @@ Please provide a detailed answer based on the context provided. Include source r
             for source in unique_sources:
                 count = sources.count(source)
                 st.write(f"- **{source}**: {count} chunks")
-    
+        with tab6:
+            st.header("🤖 Multi-Agent Collaboration")
+
+            if st.session_state.all_texts:
+                if st.button("Run Multi-Agent Analysis", key="multi_agent_button"):
+                    context = "\n\n".join(st.session_state.all_texts)
+                    
+                    # Initialize multi-agent system
+                    mas = MultiAgentSystem(client)
+                    mas.add_agent(Agent("Reader Agent", client, "extracts key concepts, findings, and data points"))
+                    mas.add_agent(Agent("Reviewer Agent", client, "critiques, questions assumptions, identifies gaps"))
+                    mas.add_agent(Agent("Synthesizer Agent", client, "synthesizes insights and proposes hypotheses"))
+                    
+                    with st.spinner("Agents collaborating..."):
+                        conversation = mas.run_cycle(context)
+                    
+                    # Display outputs of each agent
+                    st.subheader("Agent Outputs")
+                    for agent_name, output in conversation.items():
+                        with st.expander(agent_name):
+                            st.markdown(output)
+                    
+                    # Generate a final Collective Insight Report
+                    final_prompt = (
+                        "Based on the outputs of all agents, generate a concise "
+                        "collective insight report with reasoning and references."
+                    )
+                    combined_context = "\n\n".join(conversation.values())
+                    insight_report = st.session_state.report_generator.generate_response(
+                        final_prompt + "\n\n" + combined_context
+                    )
+                    
+                    st.subheader("📑 Collective Insight Report")
+                    st.markdown(insight_report)
+                    
+                    st.download_button(
+                        label="Download Insight Report",
+                        data=insight_report,
+                        file_name="collective_insight_report.txt",
+                        mime="text/plain"
+                    )
+            else:
+                st.error("Please process some documents first!")
+                
+   
     else:
         st.info("👈 Please upload documents or provide URLs from the sidebar to get started!")
         
@@ -470,6 +568,10 @@ Please provide a detailed answer based on the context provided. Include source r
           - Research gaps and future directions
         - 📥 Download reports for offline use
         """)
+    
+
+    
+
 
 if __name__ == "__main__":
     main()
